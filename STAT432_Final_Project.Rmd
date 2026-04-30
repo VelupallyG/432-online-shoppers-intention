@@ -328,9 +328,17 @@ ctrl <- trainControl(
 results <- list()
 ```
 
+### Discriminant Analysis: Choosing Between LDA, QDA, and Naive Bayes
+
+Among generative classifiers, we consider three options: Linear Discriminant Analysis (LDA), Quadratic Discriminant Analysis (QDA), and Naive Bayes. We select **LDA** for the following reasons:
+
+- **QDA** requires estimating a separate covariance matrix for each class. With our high-dimensional dummy-encoded feature space, the within-class covariance matrices become singular or near-singular, forcing us to restrict QDA to a small PCA subspace and lose information from the categorical predictors.
+- **Naive Bayes** assumes conditional independence among features given the class — a strong assumption clearly violated here (e.g., `BounceRates` and `ExitRates` are highly correlated, as are page counts and durations). While Naive Bayes can still produce reasonable rankings, its probability estimates are poorly calibrated under dependence, and it typically underperforms LDA when the shared-covariance assumption is approximately satisfied.
+- **LDA** assumes multivariate normality with a shared covariance matrix across classes. While normality is imperfect for our skewed features, the shared-covariance assumption is more defensible than independence, and LDA can operate on the full encoded feature set without dimensionality issues. It also provides a natural projection onto the discriminant axis, aiding interpretation.
+
 ### Linear Discriminant Analysis (LDA)
 
-LDA assumes each class has a multivariate normal distribution with a shared covariance matrix. It projects the data onto the single linear discriminant axis that maximally separates the two classes. Given the collinearity we observed earlier, we should expect LDA to perform comparably to logistic regression.
+LDA projects the data onto the single linear discriminant axis that maximally separates the two classes. Given the collinearity we observed earlier, we should expect LDA to perform comparably to logistic regression.
 
 ```{r lda-fit}
 lda_model <- train(
@@ -352,63 +360,6 @@ results[["LDA"]] <- list(
   model = lda_model,
   cm = lda_cm,
   probs = lda_prob
-)
-```
-
-### Quadratic Discriminant Analysis (QDA)
-
-QDA relaxes LDA's assumption of equal covariance matrices, allowing each class to have its own covariance structure. This additional flexibility may help if the purchase and non-purchase sessions differ not just in their means but also in their variance patterns. However, QDA estimates more parameters and can be unstable with many features, especially when some are near-collinear. We use the dummy-encoded features but may need to apply PCA first if QDA fails on the full feature set.
-
-```{r qda-fit, warning=FALSE}
-train_pca_full <- as.data.frame(pca_fit$x[, 1:7])
-test_pca_full <- as.data.frame(predict(pca_fit, test_numeric_scaled)[, 1:7])
-
-qda_model <- train(
-  x = train_pca_full,
-  y = train_y,
-  method = "qda",
-  trControl = ctrl,
-  metric = "ROC"
-)
-
-qda_pred <- predict(qda_model, test_pca_full)
-qda_prob <- predict(qda_model, test_pca_full, type = "prob")
-
-qda_cm <- confusionMatrix(qda_pred, test_y, positive = "Yes")
-cat("QDA Test Results (on 7 PCs from numeric features):\n")
-print(qda_cm)
-
-results[["QDA"]] <- list(
-  model = qda_model,
-  cm = qda_cm,
-  probs = qda_prob
-)
-```
-
-### Naive Bayes
-
-Naive Bayes assumes that features are conditionally independent given the class label. This is almost certainly violated in our data (e.g., `BounceRates` and `ExitRates` are strongly correlated), but the method can still perform surprisingly well in practice because it only needs to estimate the correct *decision boundary*, not the full joint distribution. We apply Naive Bayes to the full encoded feature set.
-
-```{r nb-fit, warning=FALSE}
-nb_model <- train(
-  x = train_x_scaled,
-  y = train_y,
-  method = "naive_bayes",
-  trControl = ctrl,
-  metric = "ROC"
-)
-
-nb_pred <- predict(nb_model, test_x_scaled)
-nb_prob <- predict(nb_model, test_x_scaled, type = "prob")
-
-nb_cm <- confusionMatrix(nb_pred, test_y, positive = "Yes")
-cat("Naive Bayes Test Results:\n")
-print(nb_cm)
-
-results[["Naive Bayes"]] <- list(
-  model = nb_model,
-  cm = nb_cm,
-  probs = nb_prob
 )
 ```
 
@@ -444,6 +395,9 @@ results[["KNN"]] <- list(
 ```
 
 ```{r knn-pca, fig.width=7, fig.height=5}
+train_pca_full <- as.data.frame(pca_fit$x[, 1:7])
+test_pca_full <- as.data.frame(predict(pca_fit, test_numeric_scaled)[, 1:7])
+
 knn_pca_model <- train(
   x = train_pca_full,
   y = train_y,
@@ -525,21 +479,3 @@ legend("bottomright",
                        sapply(roc_list, function(r) round(auc(r), 3)), ")"),
        col = 1:length(roc_list), lwd = 2, cex = 0.8)
 ```
-
-The comparison table and ROC curves allow us to assess which methods are most effective for this dataset. Several patterns emerge:
-
-1. **LDA achieves the highest AUC** among the methods tested so far, benefiting from the strong linear signal in features like `PageValues` and `ExitRates`. Its Gaussian class-conditional assumption is reasonable for the standardized numeric features.
-
-2. **All models show low sensitivity.** This is a direct consequence of the class imbalance ($\sim 85\%$ non-purchase): with the default 0.5 probability threshold, models are biased toward predicting the majority class. High specificity paired with low sensitivity means these classifiers are conservative — they rarely predict a purchase unless the evidence is overwhelming.
-
-3. **QDA on PCA-reduced features** provides a useful contrast to LDA. By allowing each class its own covariance structure, QDA can capture differences in variance between purchasers and non-purchasers, but it requires dimensionality reduction to avoid singular covariance estimates.
-
-4. **Naive Bayes** performs reasonably despite its strong independence assumption. The conditional independence violation (e.g., `BounceRates`/`ExitRates` correlation) degrades its probability calibration but does not destroy the ranking of observations.
-
-5. **KNN suffers from the curse of dimensionality.** Even after removing near-zero-variance columns, the feature space remains high-dimensional, making Euclidean distance less discriminative. KNN on PCA-reduced features may partially mitigate this.
-
-These results motivate several next steps: (1) applying oversampling (e.g., SMOTE) or class weighting to improve sensitivity, (2) fitting regularized models (Lasso, Ridge) and tree-based ensembles (Random Forest, Gradient Boosting) that may better handle the feature space, and (3) tuning the classification threshold to balance sensitivity and specificity according to the business cost of missing a potential purchaser.
-
-
-
-
