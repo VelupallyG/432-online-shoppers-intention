@@ -1,0 +1,135 @@
+---
+title: "STAT432 Final Project"
+output: pdf_document
+date: "2026-04-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction and Contextualization
+
+"Online Shoppers Purchasing Intention Dataset" provided by UCI Machine Learning Repository [here](https://archive.ics.uci.edu/dataset/468/online+shoppers+purchasing+intention+dataset).
+
+The dataset contains $12{,}330$ observations of online shopping sessions, with $17$ input variables and one categorical output variable, `Revenue`, indicating whether the session ended in a purchase. The classes are imbalanced, with only about $15\%$ of sessions resulted in a purchase. There is no missing data.
+
+We divide the $17$ predictors into four conceptual groups:
+
+- **Page Interaction Features**: the number of pages of each type visited in the session and the total time spent on them: `Administrative`, `Administrative_Duration`, `Informational`, `Informational_Duration`, `ProductRelated`, and `ProductRelated_Duration`. These are derived from URL information and updated in real time as the user moves between pages.
+
+- **Google Analytics Metrics** — engagement-quality metrics from Google Analytics: `BounceRates` (the percentage of visitors who enter the site from a page and leave without triggering any further requests), `ExitRates` (the percentage of pageviews on a page that were the last in the session), and `PageValues` (the average value of a page that a user visited before completing a transaction).
+
+- **Session Context Features** — time- and seasonality-related variables: `SpecialDay`, `Month`, and `Weekend`. The `SpecialDay` value reflects how close the visit is to a holiday such as Valentine's Day or Mother's Day; for Valentine's Day, for instance, it takes a nonzero value between February 2 and February 12 and peaks at $1$ on February 8.
+
+- **User Technical Profile** — session-level user attributes: `OperatingSystems`, `Browser`, `Region`, `TrafficType`, and `VisitorType` (whether the user is a new or returning visitor).
+
+Our goal is to build classification models that can effectively determine whether or not an online shopper will make a purchase based on the feature variables above.
+
+## Data Preprocessing and Visualization
+
+We'll start by loading in our data.
+
+```{r load-data, message=FALSE}
+# load library
+library(tidyverse)
+
+# laod in data, look at first few observations
+shoppers <- read_csv("online_shoppers_intention.csv")
+glimpse(shoppers)
+```
+
+Before fitting any models, we want to inspect the distribution of each input variable individually. This helps us visually identify features that may be skewed or that may follow a distribution that we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
+
+```{r univariate-numeric, fig.width=9, fig.height=7}
+numeric_features <- c(
+  "Administrative", "Administrative_Duration",
+  "Informational", "Informational_Duration",
+  "ProductRelated", "ProductRelated_Duration",
+  "BounceRates", "ExitRates", "PageValues", "SpecialDay"
+)
+
+shoppers %>%
+  select(all_of(numeric_features)) %>%
+  pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  facet_wrap(~ feature, scales = "free", ncol = 3) +
+  labs(title = "Distributions of Numeric Features", x = NULL, y = "Count") +
+  theme_minimal()
+```
+
+After plotting, we notice that each of our numeric features is mostly centered near $0$ and have skew to the right. We may want to perform some log transformation of our features to handle the skew. Notably, `SpecialDay` contains discrete values which may require special handling.
+
+```{r univariate-categorical, fig.width=9, fig.height=7}
+categorical_features <- c(
+  "Month", "OperatingSystems", "Browser",
+  "Region", "TrafficType", "VisitorType", "Weekend"
+)
+
+shoppers %>%
+  select(all_of(categorical_features)) %>%
+  mutate(across(everything(), as.character)) %>%
+  pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = value)) +
+  geom_bar(fill = "steelblue") +
+  facet_wrap(~ feature, scales = "free", ncol = 3) +
+  labs(title = "Distributions of Categorical Features", x = NULL, y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Several of the categorical distributions are heavily imbalanced. `Browser`, `OperatingSystems`, and `TrafficType` are dominated by one or two levels with a long tail of rare ones, which suggests we may want to lump rare levels together (e.g. via `forcats::fct_lump`) before modeling so that the rare levels don't introduce instability. `VisitorType` is mostly returning visitors with a smaller share of new visitors, and `Weekend` is mostly `FALSE`. `Month` shows a seasonal pattern with clear peaks (notably in May and November). Whether features like `OperatingSystems` or `Browser` carry real predictive signal is an open question — we'll get a better sense of that in the bivariate plots below.
+
+### Bivariate Distributions vs. Revenue
+
+Univariate plots tell us how each feature is distributed in isolation, but for a classification problem the more useful question is: *does this feature differ between sessions that ended in a purchase and those that did not?* If the conditional distributions of a feature given `Revenue = TRUE` and `Revenue = FALSE` look similar, that feature carries little signal; if they look different, it likely matters. We use boxplots for the numeric features (comparing distributions by `Revenue`) and stacked proportion bars for the categorical features (showing the proportion of purchases within each level relative to the $\sim 15\%$ overall purchase rate).
+
+```{r bivariate-numeric, fig.width=9, fig.height=7}
+shoppers %>%
+  select(all_of(numeric_features), Revenue) %>%
+  pivot_longer(-Revenue, names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = Revenue, y = value, fill = Revenue)) +
+  geom_boxplot(outlier.size = 0.4, alpha = 0.8) +
+  facet_wrap(~ feature, scales = "free_y", ncol = 3) +
+  labs(title = "Numeric Features by Revenue", x = "Revenue", y = NULL) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r bivariate-categorical, fig.width=9, fig.height=7}
+shoppers %>%
+  select(all_of(categorical_features), Revenue) %>%
+  mutate(across(-Revenue, as.character)) %>%
+  pivot_longer(-Revenue, names_to = "feature", values_to = "value") %>%
+  ggplot(aes(x = value, fill = Revenue)) +
+  geom_bar(position = "fill") +
+  geom_hline(yintercept = mean(shoppers$Revenue), linetype = "dashed", color = "black") +
+  facet_wrap(~ feature, scales = "free_x", ncol = 3) +
+  labs(title = "Purchase Proportion by Categorical Feature",
+       subtitle = "Dashed line marks the overall purchase rate (~15%)",
+       x = NULL, y = "Proportion") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Scatterplot Matrix
+
+So far we've looked at each predictor on its own and against the target, but we haven't yet examined how the predictors relate to one another. Several of our numeric features are likely to be strongly related by construction — for example, the count of pages of a given type and the total time spent on those pages should rise together, and `BounceRates` and `ExitRates` measure closely related notions of leaving the site. Highly collinear predictors are a problem for linear models like logistic regression (unstable coefficients, inflated standard errors) and motivate the use of regularization methods like Lasso or Ridge. A scatterplot matrix on the numeric features lets us see these pairwise relationships directly, including any nonlinear patterns that a single correlation coefficient would miss.
+
+```{r scatterplot-matrix, fig.width=10, fig.height=10}
+shoppers_numeric <- subset(shoppers, select = numeric_features)
+pairs(shoppers_numeric,
+      main = "Scatterplot Matrix for Numeric Features",
+      col = "navy",
+      pch = 20)
+```
+
+A few clear patterns stand out from the matrix. Most obviously, each count-and-duration pair lies almost exactly on a line: `Administrative` with `Administrative_Duration`, `Informational` with `Informational_Duration`, and `ProductRelated` with `ProductRelated_Duration`. This is unsurprising — visiting more pages of a given type produces more total time spent on those pages — but it means each pair carries largely the same information, so we should expect collinearity issues with linear models if we include both. `BounceRates` and `ExitRates` also show a strong positive linear relationship, which makes sense given that both measure forms of leaving the site; we will likely want to include only one of them, or rely on regularization to handle the redundancy. Beyond these tight pairs, the relationships are weaker and harder to read because of the heavy right-skew in most features (most points are clustered near the origin with a long tail of outliers), reinforcing the case for log-transforming these variables before fitting linear models. `PageValues` and `SpecialDay` do not appear to be strongly related to any of the other features.
+
+
+
+
+
+
+
