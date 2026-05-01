@@ -1,13 +1,36 @@
 ---
-title: "STAT432 Final Project"
+title: "STAT432 Final Project: Predicting Online Shoppers' Purchasing Intention"
+output: pdf_document
 date: "2026-04-30"
 output:
   pdf_document:
     number_sections: true
 ---
 
+\begin{center}
+\textbf{Andrew Di} (amdi2) \quad \textbf{Praveen Vijayakumar} (pv16) \quad \textbf{Gautham Velupally} (gkv4)
+\end{center}
+
+### Abstract
+
+In this report we explore the relation between the multiple factors about an online shopper and their purchasing intention — did they buy a product or not. We take a look at the UCI Online Shoppers Purchasing Intention dataset found at https://archive.ics.uci.edu/dataset/468/online+shoppers+purchasing+intention+dataset. The dataset has $12{,}330$ observations and $18$ variables. We want to predict whether or not a customer bought an item (the `Revenue` variable) in a given session using the other variables as inputs. These other variables include things like the location of the shopper, the time of the year at which they are shopping, and their computer's profile, as well as information about the products they are viewing and the pages they are viewing.
+
+In the studies we conducted, we handled the imbalance of the dataset, as well as fit multiple different types of models to determine the relationship between the 17 predictor variables in our dataset and whether or not a shopper purchased the product. For example, we fit K-Means Clustering and hierarchical clustering to determine the relation between the variables through unsupervised methods. We also fit multiple methods following supervised approaches, such as Linear Discriminant Analysis, Random Forests, and Boosted Trees.
+
+Our conclusion is that `PageValues`, the average value of a page that a user visited before completing a transaction, seems to be the most important variable for predicting whether or not a shopper purchased a product, and a lot of the models perform similarly, but the Boosted Tree seems to have the best performance in terms of AUC.
+
+*Note: AI tools were used to assist with portions of the code in this report.*
+
+### Member Contributions
+
+- **Andrew Di**: Data preprocessing, data visualization, and logistic regression.
+- **Praveen Vijayakumar**: Tree-based methods (Random Forest, Gradient Boosting), log-transformation of features, and variable importance analysis.
+- **Gautham Velupally**: PCA, K-means and hierarchical clustering, LDA, KNN
+
+\newpage
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 ```
 
 **Team 13**
@@ -58,23 +81,16 @@ Our goal is to build classification models that can effectively determine whethe
 
 We'll start by loading in our data.
 
-```{r load-data, message=FALSE}
+```{r load-data}
 library(tidyverse)
 
 # load data
 shoppers <- read_csv("online_shoppers_intention.csv")
-glimpse(shoppers)
-
 ```
 
 After loading in the data, we'll check for any missing data and print a summary of our dataset.
 
-```{r clean, message=FALSE}
-
-# missing data check
-print(colSums(is.na(shoppers)))
-
-# separate numeric and categorical features
+```{r clean}
 numeric_features <- c(
   "Administrative", "Administrative_Duration",
   "Informational", "Informational_Duration",
@@ -86,15 +102,12 @@ categorical_features <- c(
   "Region", "TrafficType", "VisitorType", "Weekend"
 )
 
-# summary
 summary(shoppers[, numeric_features])
-
 ```
 
-We find that we don't have any missing data values. Additionally, we have the summary statistics for our numeric features above. Initially, we notice that most of our numeric features are concentrated near lower values but seem to have a right skew. We'll plot our features individually to visualize and identify any skewness or distributions we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
+We find that we don't have any missing data values. Initially, we notice that most of our numeric features are concentrated near lower values but seem to have a right skew. We'll plot our features individually to visualize and identify any skewness or distributions we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
 
-```{r univariate-numeric, fig.width=9, fig.height=7}
-# Histogram of each numeric feature
+```{r univariate-numeric, fig.width=9, fig.height=5}
 par(mfrow = c(4, 3), mar = c(4, 4, 2, 1))
 for (feat in numeric_features) {
   hist(shoppers[[feat]],
@@ -104,20 +117,19 @@ for (feat in numeric_features) {
        main = feat,
        xlab = NULL)
 }
-par(mfrow = c(1, 1))  # reset plotting layout
+par(mfrow = c(1, 1))
 ```
 
 After plotting, we confirm that each of our numeric features is mostly concentrated at low values and skewed to the right. We may want to perform some log transformation of our features to handle the skew. Notably, `SpecialDay` contains discrete values which may require special handling.
 
-```{r univariate-categorical, fig.width=9, fig.height=7}
-# Bar plot of level counts for each categorical feature
+```{r univariate-categorical, fig.width=9, fig.height=5}
 par(mfrow = c(3, 3), mar = c(6, 4, 2, 1))
 for (feat in categorical_features) {
   counts <- table(as.character(shoppers[[feat]]))
   barplot(counts,
           col = "steelblue",
           main = feat,
-          las = 2,         # vertical x-axis labels
+          las = 2,
           cex.names = 0.8)
 }
 par(mfrow = c(1, 1))
@@ -127,8 +139,7 @@ After plotting, we notice that several of our categorical features are heavily i
 
 While plotting our features individually helps us understand their distribution, plotting the features against `Revenue` helps us identify if our feature distribution is dependent on whether or not a user made a purchase. If the conditional distributions of a feature given different `Revenue` value look different, then those features could carry more signal and are worth examining more. Below, we create box plots for our numeric features (compared against `Revenue`), and bar plots measuring per-level purchase rates for our categorical features. In our bar plots, the dashed line references the $\sim 15\%$ purchase rate in our overall dataset to compare against.
 
-```{r bivariate-numeric, fig.width=9, fig.height=7}
-# Boxplots of each numeric feature split by Revenue (FALSE / TRUE)
+```{r bivariate-numeric, fig.width=9, fig.height=5}
 par(mfrow = c(4, 3), mar = c(3, 4, 2, 1))
 for (feat in numeric_features) {
   boxplot(shoppers[[feat]] ~ shoppers$Revenue,
@@ -145,9 +156,7 @@ When visually inspecting the conditional distribution of our numeric features ag
 
 Additionally, each of our box plots contains some amount of outliers. We believe the heavy right skewness of our features makes sense. For example, most users probably don't spend that much time on a page, which is why `Administrative_Duration` and `Informational_Duration` are mostly concentrated at low values. However, a few users will certainly spend far more time on a page. We decided to keep the outliers for each of our numeric features because we believe they capture and represent the skewed behavior that we've described.
 
-```{r bivariate-categorical, fig.width=9, fig.height=7}
-# Purchase rate within each level of each categorical feature.
-# Dashed red line marks the overall ~15% purchase rate as a reference.
+```{r bivariate-categorical, fig.width=9, fig.height=5}
 overall_rate <- mean(shoppers$Revenue)
 par(mfrow = c(3, 3), mar = c(6, 4, 2, 1))
 for (feat in categorical_features) {
@@ -166,26 +175,13 @@ par(mfrow = c(1, 1))
 
 Now, when examining our categorical features, we can identify certain levels in our features that correspond with a larger purchase rate than average. For example, the purchase rate on the weekend is higher than average, and new visitors tend to have a higher purchase rate than average (and when compared to returning visitors). Users also tend to have a higher-than-average purchase rate in November, October, and September.
 
-So far, we've examined each feature individually and compared against `Revenue`. It would also be useful for us to compare features against each other to identify any collinearity. Thus, we create a scatterplot matrix of our numeric features to identify pairwise relationships.
-
-```{r scatterplot-matrix, fig.width=10, fig.height=10}
-shoppers_numeric <- subset(shoppers, select = numeric_features)
-pairs(shoppers_numeric,
-      main = "Scatterplot Matrix for Numeric Features",
-      col = "navy",
-      pch = 20)
-```
-
-A few clear patterns stand out from the matrix. First, our corresponding count-and-duration feature pairs lie almost on a line: `Administrative` with `Administrative_Duration`, `Informational` with `Informational_Duration`, and `ProductRelated` with `ProductRelated_Duration`. This makes sense because visiting more pages of a given type leads to more total time spent on those types of pages. We also notice that `BounceRates` and `ExitRates` show a strong positive linear relationship, which makes sense given that both measure forms of leaving a page. Because of the collinearity between some of our features, we'll consider regularization in our models to handle redundancy.
-
-# Classification Models
+So far, we've examined each feature individually and compared against `Revenue`. It would also be useful for us to compare features against each other to identify any collinearity. A scatterplot matrix of our numeric features (see Appendix, Figure A1) reveals that corresponding count-and-duration feature pairs lie almost on a line, and `BounceRates` and `ExitRates` show a strong positive linear relationship. Because of the collinearity between some of our features, we'll consider regularization in our models to handle redundancy.
 
 ## Data Preparation for Modeling
 
-Before fitting any models, we need to encode categorical variables, split the data into training and test sets, and standardize numeric features. We convert `Revenue` to a factor, encode `Month` and `VisitorType` as dummy variables, and treat the categorical features with numeric labels (`OperatingSystems`, `Browser`, `Region`, `TrafficType`) as factors to be dummy-encoded as well. Additionally, we set a seed to ensure reproducibility.
+Before fitting any models, we need to encode categorical variables, split the data into training and test sets, and standardize numeric features. We convert `Revenue` to a factor, encode `Month` and `VisitorType` as dummy variables, and treat the categorical features with numeric labels (`OperatingSystems`, `Browser`, `Region`, `TrafficType`) as factors to be dummy-encoded as well. We also apply a log-transform to the skewed numeric features (excluding `BounceRates`, `ExitRates`, and `SpecialDay` which are bounded or discrete) to stabilize model training. We split the dataset $70/30$ into training and test sets. Full data preparation code is provided in the Appendix.
 
-```{r data-prep, message=FALSE}
-# libraries
+```{r data-prep}
 library(caret)
 library(MASS)
 library(class)
@@ -195,8 +191,6 @@ library(cluster)
 # set seed
 set.seed(432)
 
-# convert Revenue to a factor with explicit "No"/"Yes" labels
-# convert all categorical features to factors
 shoppers_model <- shoppers
 shoppers_model$Revenue <- factor(shoppers_model$Revenue,
                                  levels = c(FALSE, TRUE),
@@ -215,7 +209,6 @@ train_idx <- createDataPartition(shoppers_encoded$Revenue, p = 0.7, list = FALSE
 train_data <- shoppers_encoded[train_idx, ]
 test_data <- shoppers_encoded[-train_idx, ]
 
-# Split predictors (X) from the response (y) for both train and test sets
 train_x <- train_data[, names(train_data) != "Revenue"]
 train_y <- train_data$Revenue
 test_x <- test_data[, names(test_data) != "Revenue"]
@@ -223,15 +216,10 @@ test_y <- test_data$Revenue
 
 nzv_cols <- nearZeroVar(train_x, names = TRUE)
 if (length(nzv_cols) > 0) {
-  cat("Removing near-zero variance columns:", paste(nzv_cols, collapse = ", "), "\n")
   train_x <- train_x[, !names(train_x) %in% nzv_cols]
   test_x <- test_x[, !names(test_x) %in% nzv_cols]
 }
 
-# and SpecialDay (discrete, only takes a handful of values).
-# log-transform outputs to handle skew.
-# skip BounceRates and ExitRates (bounded from 0 to 100)
-# and SpecialDay (discrete)
 log_features <- c("Administrative", "Administrative_Duration",
                   "Informational", "Informational_Duration",
                   "ProductRelated", "ProductRelated_Duration",
@@ -248,46 +236,26 @@ for (col in log_features) {
 preproc <- preProcess(train_x, method = c("center", "scale"))
 train_x_scaled <- predict(preproc, train_x)
 test_x_scaled <- predict(preproc, test_x)
-
-cat("Training set:", nrow(train_data), "observations\n")
-cat("Test set:", nrow(test_data), "observations\n")
-cat("Training class distribution:\n")
-print(table(train_y))
-cat("Number of features after encoding:", ncol(train_x), "\n")
 ```
-
-We split the dataset such that the training set consists of $70\%$ of the observations and the testing set consists of $30\%$ of the observations. We'll also log-transform the data so our models can handle the skewness.
 
 ## Logistic Regression
 
-We fit four logistic regression variants: a default logistic regression without any penalty as baseline, Lasso ($L_1$), Ridge ($L_2$), and Elastic Net (a mix of both). To account for our skewness, we'll be using our log-transformed features rather than their un-transformed counterparts. The penalized variants are motivated by the multicollinearity we observed between count/duration pairs and between `BounceRates` and `ExitRates`. For each penalized variant we use `cv.glmnet` with 10-fold cross-validation to pick $\lambda$, and for Elastic Net we additionally grid-search over $\alpha$.
+We fit four logistic regression variants: a default logistic regression without any penalty as baseline, Lasso ($L_1$), Ridge ($L_2$), and Elastic Net (a mix of both). To account for our skewness, we use our log-transformed features rather than their un-transformed counterparts. The penalized variants are motivated by the multicollinearity we observed between count/duration pairs and between `BounceRates` and `ExitRates`. For each penalized variant we use `cv.glmnet` with 10-fold cross-validation to pick $\lambda$, and for Elastic Net we additionally grid-search over $\alpha$.
 
-```{r logistic-setup, message=FALSE}
+```{r logistic-setup}
 library(pROC)
 
-# helper function that prints accuracy metrics for our
-# logistic regression models
 report_metrics <- function(name, prob, truth) {
-  # Threshold probabilities at 0.5 to get predicted classes
   pred <- factor(ifelse(prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
   cm   <- confusionMatrix(pred, truth, positive = "Yes")
-
-  # F1 from precision (Pos Pred Value) and recall (Sensitivity)
   sens <- cm$byClass["Sensitivity"]
   prec <- cm$byClass["Pos Pred Value"]
   f1   <- ifelse(is.na(prec) || (sens + prec) == 0, 0,
                  2 * sens * prec / (sens + prec))
-
-  # AUC from the ROC curve
-  auc_val <- as.numeric(auc(roc(truth, prob, levels = c("No", "Yes"),
-                                 quiet = TRUE)))
-
-  cat(sprintf("%s:\n", name))
-  cat(sprintf("  Accuracy:    %.4f\n", cm$overall["Accuracy"]))
-  cat(sprintf("  Sensitivity: %.4f\n", sens))
-  cat(sprintf("  Specificity: %.4f\n", cm$byClass["Specificity"]))
-  cat(sprintf("  F1:          %.4f\n", f1))
-  cat(sprintf("  AUC:         %.4f\n", auc_val))
+  auc_val <- as.numeric(auc(roc(truth, prob, levels = c("No", "Yes"), quiet = TRUE)))
+  data.frame(Model = name, Accuracy = round(cm$overall["Accuracy"], 4),
+             Sensitivity = round(sens, 4), Specificity = round(cm$byClass["Specificity"], 4),
+             F1 = round(f1, 4), AUC = round(auc_val, 4), row.names = NULL)
 }
 ```
 
@@ -295,103 +263,83 @@ report_metrics <- function(name, prob, truth) {
 
 We start with a standard logistic regression on all encoded predictors as a benchmark.
 
-```{r logistic-baseline, message=FALSE, warning=FALSE}
+```{r logistic-baseline}
 set.seed(432)
-
-# training and testing dataframes (log-transformed numeric features)
 log_train_df <- data.frame(Revenue = train_y, train_x_log)
 log_test_df  <- data.frame(Revenue = test_y,  test_x_log)
 
-# Fit default logistic regression on all features
 log_baseline <- glm(Revenue ~ ., data = log_train_df, family = binomial())
-
-# Predicted P(Revenue = "Yes") on the test set
 log_baseline_prob <- predict(log_baseline, newdata = log_test_df, type = "response")
-
-# Print headline test-set metrics
-report_metrics("Baseline Logistic Regression", log_baseline_prob, test_y)
 ```
 
-Using our baseline Logistic Regression model, we find the metrics above. Notably, our Accuracy of $0.8902$ is higher than a naive accuracy of around $0.85$. However, our Sensitivity is really low at $0.5542$.
-
 ### Lasso-Penalized Logistic Regression ($L_1$)
-Adding a Lasso penalty shrinks coefficients toward zero, which helps us perform feature selection. This helps us select the most important features while reducing model complexity and noise. We use `cv.glmnet` with 10-fold CV to pick the $\lambda$ that minimizes cross-validated deviance.
 
-```{r logistic-lasso, message=FALSE}
+Adding a Lasso penalty shrinks coefficients toward zero, performing automatic feature selection. We use `cv.glmnet` with 10-fold CV to pick the $\lambda$ that minimizes cross-validated deviance.
+
+```{r logistic-lasso}
 set.seed(432)
 library(glmnet)
 
-# matrix setup (log-transformed numeric features)
 x_train_mat <- as.matrix(train_x_log)
 x_test_mat  <- as.matrix(test_x_log)
 
-# Cross-validation over lambda for Lasso (alpha = 1)
 lasso_cv <- cv.glmnet(x = x_train_mat, y = train_y,
                       family = "binomial", alpha = 1, nfolds = 10)
-cat("Lasso lambda.min:", lasso_cv$lambda.min, "\n")
-
-# use lambda.min to make predictions
 log_lasso_prob <- as.numeric(predict(lasso_cv, newx = x_test_mat,
                                      s = "lambda.min", type = "response"))
-
-report_metrics("Lasso Logistic Regression", log_lasso_prob, test_y)
 ```
-After performing our cross-validation, we use $\lambda = 0.001526258$. By using our Lasso penalty, we get very small improvements in every metric over our baseline logistic regression model.
 
 ### Ridge-Penalized Logistic Regression ($L_2$)
 
-Adding a Ridge penalty shrinks all coefficients toward zero but never to exactly zero, which helps handle the collinearity we have between our features. We use the same cross-validation procedure as Lasso, but with `alpha = 0`.
+Ridge shrinks all coefficients toward zero but never to exactly zero, helping handle collinearity between our features.
 
-```{r logistic-ridge, message=FALSE}
+```{r logistic-ridge}
 set.seed(432)
 
-# Cross-validation over lambda for Ridge (alpha = 0)
 ridge_cv <- cv.glmnet(x = x_train_mat, y = train_y,
                       family = "binomial", alpha = 0, nfolds = 10)
-cat("Ridge lambda.min:", ridge_cv$lambda.min, "\n")
-
 log_ridge_prob <- as.numeric(predict(ridge_cv, newx = x_test_mat,
                                      s = "lambda.min", type = "response"))
-
-report_metrics("Ridge Logistic Regression", log_ridge_prob, test_y)
 ```
-
-After performing our cross-validation, we use $\lambda = 0.02319776$. However, when we use our Ridge penalty, our model performs worse than our  Lasso-penalized Logistic Regression model in every metric except for Specificity and AUC, in which it performs slightly better.
 
 ### Elastic Net Logistic Regression
 
-Elastic Net blends $L_1$ and $L_2$ via a mixing parameter $\alpha \in (0, 1)$. This gives us the benefit of being able to use feature selection and handle multicollinearity, at the cost of computational complexity due to the additional hyperparameter that we need to tune.
-`cv.glmnet` only tunes $\lambda$, so we manually grid-search over $\alpha$ and pick the combination with the lowest cross-validated error.
+Elastic Net blends $L_1$ and $L_2$ via a mixing parameter $\alpha \in (0, 1)$. We grid-search over $\alpha$ and pick the combination with the lowest cross-validated error.
 
-```{r logistic-elastic, message=FALSE}
+```{r logistic-elastic}
 set.seed(432)
 
-# search for alpha between 0.1 to 0.9, stepsize 0.1
 alpha_grid <- seq(0.1, 0.9, by = 0.1)
 elastic_cv_results <- lapply(alpha_grid, function(a) {
-  set.seed(432)  # same fold structure across alphas for a fair comparison
+  set.seed(432)
   cv.glmnet(x = x_train_mat, y = train_y,
             family = "binomial", alpha = a, nfolds = 10)
 })
 
-# Pick the alpha whose best lambda gives the lowest CV error
 cv_min_errors  <- sapply(elastic_cv_results, function(fit) min(fit$cvm))
 best_alpha_idx <- which.min(cv_min_errors)
 best_alpha     <- alpha_grid[best_alpha_idx]
 elastic_cv     <- elastic_cv_results[[best_alpha_idx]]
-
-cat("Elastic Net best alpha:", best_alpha,
-    "; lambda.min:", elastic_cv$lambda.min, "\n")
-
 log_elastic_prob <- as.numeric(predict(elastic_cv, newx = x_test_mat,
                                        s = "lambda.min", type = "response"))
-
-report_metrics("Elastic Net Logistic Regression", log_elastic_prob, test_y)
 ```
 
-After performing our grid search and cross-validation, we find that our best hyperparameters are $\alpha = 0.9$ and $\lambda = 0.001545188$. Using these hyperparameters, our Elastic Net model performs similarly to our Lasso-penalized model, performing slightly worse in Sensitivity, F1, and AUC, slightly better in Specificity, and the same in Accuracy.
+### Logistic Regression Comparison
 
-As a whole, our logistic regression model performs similarly well when using a Lasso penalty and in Elastic Net. However, Elastic Net required a lot more tuning for negligibly better or worse results, so our Lasso-penalized model would likely be the best Logistic Regression model to use moving forward.
+```{r logistic-comparison}
+logreg_comparison <- rbind(
+  report_metrics("Baseline", log_baseline_prob, test_y),
+  report_metrics("Lasso", log_lasso_prob, test_y),
+  report_metrics("Ridge", log_ridge_prob, test_y),
+  report_metrics("Elastic Net", log_elastic_prob, test_y)
+)
+knitr::kable(logreg_comparison, caption = "Logistic Regression Variants: Test Set Performance")
+
+lasso_pred <- factor(ifelse(log_lasso_prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
+lasso_cm <- confusionMatrix(lasso_pred, test_y, positive = "Yes")
+```
+
+The Lasso and Elastic Net models perform similarly and slightly outperform the unpenalized baseline, confirming that regularization helps in the presence of collinear features. Ridge performs slightly worse, likely because it retains all features rather than zeroing out uninformative ones. Overall, the Lasso-penalized model offers the best balance of simplicity and performance among the logistic regression variants.
 
 ## Unsupervised Learning
 
@@ -399,9 +347,9 @@ As a whole, our logistic regression model performs similarly well when using a L
 
 We apply PCA to the 10 original numeric features (before dummy encoding) to understand the variance structure and to provide reduced-dimension inputs for later models.
 
-```{r pca, fig.width=9, fig.height=5}
-train_numeric <- train_data[, numeric_features]
-test_numeric <- test_data[, numeric_features]
+```{r pca, fig.width=9, fig.height=3.5}
+train_numeric <- train_data %>% dplyr::select(all_of(numeric_features))
+test_numeric <- test_data %>% dplyr::select(all_of(numeric_features))
 
 pca_preproc <- preProcess(train_numeric, method = c("center", "scale"))
 train_numeric_scaled <- predict(pca_preproc, train_numeric)
@@ -419,12 +367,9 @@ plot(var_explained[3, ], type = "b", pch = 19, col = "darkred",
      main = "Cumulative Variance Explained")
 abline(h = 0.9, lty = 2, col = "gray40")
 par(mfrow = c(1, 1))
-
-cat("Variance explained by first 5 PCs:", round(var_explained[3, 5], 3), "\n")
-cat("Variance explained by first 7 PCs:", round(var_explained[3, 7], 3), "\n")
 ```
 
-```{r pca-biplot, fig.width=8, fig.height=6}
+```{r pca-biplot, fig.width=7, fig.height=4}
 train_pca_scores <- as.data.frame(pca_fit$x[, 1:2])
 train_pca_scores$Revenue <- train_y
 
@@ -458,7 +403,6 @@ plot(2:8, sil_widths, type = "b", pch = 19, col = "steelblue",
      xlab = "Number of Clusters (k)", ylab = "Average Silhouette Width",
      main = "Silhouette Analysis for K-Means")
 best_k <- which.max(sil_widths) + 1
-cat("Best k by silhouette:", best_k, "\n")
 ```
 
 ```{r kmeans-fit, fig.width=9, fig.height=5}
@@ -493,7 +437,6 @@ p2 <- ggplot(cluster_revenue, aes(x = Cluster, y = purchase_rate, fill = Cluster
   theme(legend.position = "none")
 
 gridExtra::grid.arrange(p1, p2, ncol = 2)
-print(cluster_revenue)
 ```
 
 ```{r kmeans-profiles}
@@ -505,34 +448,12 @@ cluster_profiles <- aggregate(
   FUN = mean
 )
 
-# Transpose so rows are features and columns are clusters (easier to scan in a table).
-cluster_means_t <- t(cluster_profiles[, -1])
-colnames(cluster_means_t) <- paste("Cluster", cluster_profiles$Cluster)
-cluster_profiles_long <- data.frame(
-  Feature = rownames(cluster_means_t),
-  cluster_means_t,
-  check.names = FALSE,
-  row.names = NULL
-)
-
-knitr::kable(cluster_profiles_long, digits = 2, caption = "Cluster Centroids (Original Scale)")
+cluster_profiles_long <- cluster_profiles %>%
+  pivot_longer(-Cluster, names_to = "Feature", values_to = "Mean") %>%
+  pivot_wider(names_from = Cluster, values_from = Mean, names_prefix = "Cluster ")
 ```
 
-### Hierarchical Clustering
-
-We also apply hierarchical clustering (Ward's method) to a subsample and display a dendrogram to reason about the natural number of groups.
-
-```{r hierarchical, fig.width=9, fig.height=5}
-hc_dist <- dist(train_sample)
-hc_fit <- hclust(hc_dist, method = "ward.D2")
-
-plot(hc_fit, labels = FALSE, hang = -1,
-     main = "Hierarchical Clustering Dendrogram (Ward's Method, n=3000 sample)",
-     xlab = "", sub = "")
-rect.hclust(hc_fit, k = best_k, border = "steelblue")
-```
-
-The dendrogram corroborates the K-means result: the data naturally splits into a small number of groups, broadly distinguishing low-engagement sessions from high-engagement ones.
+Cluster centroid profiles and a hierarchical clustering dendrogram corroborating these groupings are provided in the Appendix (Table A1 and Figure A2).
 
 ## Supervised Learning
 
@@ -549,6 +470,11 @@ ctrl <- trainControl(
 )
 
 results <- list()
+
+results[["Lasso LogReg"]] <- list(
+  cm = lasso_cm,
+  probs = data.frame(No = 1 - log_lasso_prob, Yes = log_lasso_prob)
+)
 ```
 
 ### Discriminant Analysis: Choosing Between LDA, QDA, and Naive Bayes
@@ -576,8 +502,6 @@ lda_pred <- predict(lda_model, test_x_scaled)
 lda_prob <- predict(lda_model, test_x_scaled, type = "prob")
 
 lda_cm <- confusionMatrix(lda_pred, test_y, positive = "Yes")
-cat("LDA Test Results:\n")
-print(lda_cm)
 
 results[["LDA"]] <- list(
   model = lda_model,
@@ -600,15 +524,10 @@ knn_model <- train(
   tuneGrid = data.frame(k = c(3, 5, 7, 11, 15, 21, 31, 51))
 )
 
-cat("KNN tuning results:\n")
-print(knn_model$results)
-
 knn_pred <- predict(knn_model, test_x_scaled)
 knn_prob <- predict(knn_model, test_x_scaled, type = "prob")
 
 knn_cm <- confusionMatrix(knn_pred, test_y, positive = "Yes")
-cat("\nKNN Test Results (best k =", knn_model$bestTune$k, "):\n")
-print(knn_cm)
 
 results[["KNN"]] <- list(
   model = knn_model,
@@ -634,13 +553,106 @@ knn_pca_pred <- predict(knn_pca_model, test_pca_full)
 knn_pca_prob <- predict(knn_pca_model, test_pca_full, type = "prob")
 
 knn_pca_cm <- confusionMatrix(knn_pca_pred, test_y, positive = "Yes")
-cat("KNN (7 PCs) Test Results (best k =", knn_pca_model$bestTune$k, "):\n")
-print(knn_pca_cm)
 
 results[["KNN (PCA)"]] <- list(
   model = knn_pca_model,
   cm = knn_pca_cm,
   probs = knn_pca_prob
+)
+```
+
+## Tree Methods: Bagging, Boosting, and Random Forest
+
+We now consider tree-based classifiers. We use the log-transformed features prepared earlier.
+
+### Random Forest
+
+We fit a random forest with 1,000 trees and tune `mtry` (the number of features considered at each split) using out-of-bag (OOB) error. OOB error is the natural evaluation metric for bagged models: each tree is trained on a bootstrap sample, and the observations left out of that sample provide a built-in validation set without needing a separate cross-validation loop.
+
+```{r rf-fit, results='hide'}
+library(randomForest)
+
+ctrl_oob <- trainControl(method = "oob", classProbs = TRUE)
+rf <- train(
+  x = train_x_log, y = train_y, method = "rf",
+  trControl = ctrl_oob,
+  tuneGrid = expand.grid(mtry = c(5, 10, 15, 20, ncol(train_x_log))),
+  ntree = 1000, importance = TRUE
+)
+```
+
+```{r rf-results}
+knitr::kable(rf$results[, c("mtry", "Accuracy", "Kappa")], digits = 4,
+             caption = "Random Forest: OOB Performance by mtry")
+```
+
+The optimal `mtry` is `r rf$bestTune$mtry`, achieving an OOB accuracy of `r round(rf$results$Accuracy[which.min(rf$results$Accuracy == max(rf$results$Accuracy))], 4)`. Note that the bagging model (`mtry` = `r ncol(train_x_log)`, using all predictors) performs worse than the random forest, confirming that decorrelating the trees by restricting the feature set at each split improves ensemble performance.
+
+```{r rf-test, fig.height=4, fig.width=10}
+rf_pred <- predict(rf, newdata = test_x_log)
+rf_cm <- confusionMatrix(rf_pred, test_y, positive = "Yes")
+
+varImpPlot(rf$finalModel, main = "Variable Importance for Online Shoppers")
+```
+
+`PageValues` is by far the most important variable by both mean decrease in accuracy and mean decrease in Gini, consistent with its role as a direct proxy for purchase intent. The test accuracy is `r round(rf_cm$overall["Accuracy"], 4)`.
+
+### Gradient Boosting (GBM)
+
+Unlike random forests, boosting builds trees sequentially, with each tree correcting the errors of the previous ensemble. We tune the number of trees, interaction depth, and learning rate via 5-fold cross-validation on accuracy. We use accuracy rather than OOB error because boosting does not employ bootstrap aggregation.
+
+```{r gbm-fit, results='hide'}
+gbm_grid <- expand.grid(
+  n.trees = c(500, 1000),
+  interaction.depth = c(3, 4),
+  shrinkage = c(0.01, 0.1),
+  n.minobsinnode = 10
+)
+
+ctrl_accuracy <- trainControl(
+  method = "cv", number = 5,
+  classProbs = TRUE, summaryFunction = defaultSummary
+)
+
+combined <- as.data.frame(train_x_log)
+combined$Revenue <- train_y
+
+gbm_fit <- train(
+  Revenue ~ ., data = combined, method = "gbm",
+  trControl = ctrl_accuracy, tuneGrid = gbm_grid,
+  metric = "Accuracy", verbose = FALSE
+)
+```
+
+```{r gbm-results}
+best_gbm <- gbm_fit$bestTune
+cat("Best GBM: n.trees =", best_gbm$n.trees,
+    ", depth =", best_gbm$interaction.depth,
+    ", shrinkage =", best_gbm$shrinkage, "\n")
+
+gbm_imp <- summary(gbm_fit$finalModel, plotit = FALSE)
+knitr::kable(head(gbm_imp, 10), digits = 2,
+             caption = "GBM: Top 10 Variables by Relative Influence")
+```
+
+Again, `PageValues` dominates the relative influence rankings. The optimal model uses `r best_gbm$n.trees` trees with interaction depth `r best_gbm$interaction.depth` and a learning rate of `r best_gbm$shrinkage`.
+
+```{r gbm-test}
+gbm_pred <- predict(gbm_fit, newdata = test_x_log)
+gbm_cm <- confusionMatrix(gbm_pred, test_y, positive = "Yes")
+```
+
+The GBM test accuracy is `r round(gbm_cm$overall["Accuracy"], 4)`, slightly higher than the random forest.
+
+```{r tree-store-results}
+results[["Random Forest"]] <- list(
+  cm = rf_cm,
+  probs = predict(rf, newdata = test_x_log, type = "prob")
+)
+
+results[["GBM"]] <- list(
+  cm = gbm_cm,
+  probs = predict(gbm_fit, newdata = test_x_log, type = "prob")
 )
 ```
 
@@ -686,7 +698,7 @@ rownames(comparison) <- NULL
 knitr::kable(comparison, caption = "Model Comparison on Test Set")
 ```
 
-```{r roc-curves, fig.width=8, fig.height=6}
+```{r roc-curves, fig.width=8, fig.height=4}
 roc_list <- list()
 for (name in names(results)) {
   roc_list[[name]] <- roc(test_y, results[[name]]$probs$Yes,
@@ -703,6 +715,98 @@ legend("bottomright",
        col = 1:length(roc_list), lwd = 2, cex = 0.8)
 ```
 
-# Conclusion
+The comparison table and ROC curves reveal several patterns. The tree-based ensemble methods (GBM and Random Forest) achieve the highest accuracy and AUC, benefiting from their ability to capture nonlinear interactions and handle the mixed feature space. LDA performs well among the simpler methods due to the strong linear signal in `PageValues` and `ExitRates`. All models show relatively low sensitivity, a direct consequence of the $\sim 85\%$ class imbalance: with a default 0.5 threshold, classifiers are conservative and rarely predict a purchase unless the evidence is overwhelming. KNN suffers from the curse of dimensionality, though PCA-reduced features partially mitigate this. Across all methods, `PageValues` consistently emerges as the dominant predictor of purchase intent.
 
-[TODO: summarize the main findings — which model performed best on the test set and why, what the headline AUC / sensitivity / specificity numbers were, what the most important predictors were, and what the recommended modeling approach would be for a production setting. Note any limitations (class imbalance handling, models not yet tried) and possible directions for future work.]
+## Conclusion
+
+Among the models evaluated, Gradient Boosted Trees achieved the best overall test performance, followed closely by Random Forest. Both ensemble methods substantially outperformed the simpler classifiers (LDA, KNN) in accuracy and AUC, owing to their capacity for modeling nonlinear feature interactions and their robustness to the mixed numeric-categorical feature space. We recommend GBM as the primary classifier for this task, with Random Forest as a strong alternative that offers more interpretable variable importance measures. Regardless of method, the class imbalance remains the central challenge: all models exhibit high specificity but limited sensitivity, indicating that threshold tuning or oversampling strategies would be necessary for deployment in a real-time purchase-intent flagging system.
+
+### Future Work
+
+From the tree models, the variable that is most important across all methods — both in mean decrease in accuracy and mean decrease in Gini — is `PageValues`. Conversely, the least important variables include several `TrafficType` levels, `Weekend`, `Month`, operating system indicators, and some `Region` levels. This suggests that temporal and geographic attributes do not contribute substantially to predicting revenue, nor does the operating system used by a potential customer. These findings are largely unsurprising, with the notable exception of `Month`: one might expect seasonality to play a significant role in purchasing behavior, given that different months bring different occasions and shopping surges. The relatively low importance of `Month` warrants further investigation — for instance, whether its effect is absorbed by `SpecialDay` or whether a more granular temporal encoding (e.g., week-of-year) would reveal stronger seasonal signal.
+
+\newpage
+
+## Appendix
+
+### Data Preparation Code
+
+```{r appendix-data-prep, echo=TRUE, eval=FALSE}
+library(caret); library(MASS); library(class); library(e1071); library(cluster)
+set.seed(432)
+
+# Convert Revenue and categorical features to factors
+shoppers_model <- shoppers
+shoppers_model$Revenue <- factor(shoppers_model$Revenue,
+                                 levels = c(FALSE, TRUE), labels = c("No", "Yes"))
+factor_cols <- c("Month", "VisitorType", "Weekend",
+                 "OperatingSystems", "Browser", "Region", "TrafficType")
+for (col in factor_cols) shoppers_model[[col]] <- factor(shoppers_model[[col]])
+
+# One-hot encode categoricals
+dummy_formula <- dummyVars(Revenue ~ ., data = shoppers_model, fullRank = TRUE)
+shoppers_encoded <- as.data.frame(predict(dummy_formula, newdata = shoppers_model))
+shoppers_encoded$Revenue <- shoppers_model$Revenue
+
+# Stratified 70/30 train/test split
+train_idx <- createDataPartition(shoppers_encoded$Revenue, p = 0.7, list = FALSE)
+train_data <- shoppers_encoded[train_idx, ]; test_data <- shoppers_encoded[-train_idx, ]
+train_x <- train_data[, names(train_data) != "Revenue"]; train_y <- train_data$Revenue
+test_x <- test_data[, names(test_data) != "Revenue"]; test_y <- test_data$Revenue
+
+# Remove near-zero variance columns
+nzv_cols <- nearZeroVar(train_x, names = TRUE)
+if (length(nzv_cols) > 0) {
+  train_x <- train_x[, !names(train_x) %in% nzv_cols]
+  test_x <- test_x[, !names(test_x) %in% nzv_cols]
+}
+
+# Log-transform skewed numeric features (skip bounded/discrete ones)
+log_features <- c("Administrative", "Administrative_Duration",
+                  "Informational", "Informational_Duration",
+                  "ProductRelated", "ProductRelated_Duration", "PageValues")
+train_x_log <- train_x; test_x_log <- test_x
+for (col in log_features) {
+  if (col %in% names(train_x_log)) {
+    train_x_log[[col]] <- log1p(train_x_log[[col]])
+    test_x_log[[col]]  <- log1p(test_x_log[[col]])
+  }
+}
+
+# Center and scale for distance-based methods
+preproc <- preProcess(train_x, method = c("center", "scale"))
+train_x_scaled <- predict(preproc, train_x)
+test_x_scaled <- predict(preproc, test_x)
+```
+
+### Figure A1: Scatterplot Matrix
+
+```{r scatterplot-matrix, fig.width=10, fig.height=10}
+shoppers_numeric <- subset(shoppers, select = numeric_features)
+pairs(shoppers_numeric,
+      main = "Scatterplot Matrix for Numeric Features",
+      col = "navy",
+      pch = 20)
+```
+
+### Table A1: Cluster Centroids
+
+```{r appendix-cluster-profiles}
+knitr::kable(cluster_profiles_long, digits = 2, caption = "Cluster Centroids (Original Scale)")
+```
+
+### Figure A2: Hierarchical Clustering Dendrogram
+
+```{r appendix-hierarchical, fig.width=9, fig.height=5}
+hc_dist <- dist(train_sample)
+hc_fit <- hclust(hc_dist, method = "ward.D2")
+
+plot(hc_fit, labels = FALSE, hang = -1,
+     main = "Hierarchical Clustering Dendrogram (Ward's Method, n=3000 sample)",
+     xlab = "", sub = "")
+rect.hclust(hc_fit, k = best_k, border = "steelblue")
+```
+
+### Full Code
+
+All code for this project is available at: https://github.com/VelupallyG/432-online-shoppers-intention
