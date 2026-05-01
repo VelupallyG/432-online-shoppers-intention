@@ -1,11 +1,33 @@
 ---
-title: "STAT432 Final Project"
+title: "STAT432 Final Project: Predicting Online Shoppers' Purchasing Intention"
 output: pdf_document
 date: "2026-04-30"
 ---
 
+\begin{center}
+\textbf{Andrew Di} (amdi2) \quad \textbf{Praveen Vijayakumar} (pv16) \quad \textbf{Gautham Velupally} (gkv4)
+\end{center}
+
+### Abstract
+
+In this report we explore the relation between the multiple factors about an online shopper and their purchasing intention — did they buy a product or not. We take a look at the UCI Online Shoppers Purchasing Intention dataset found at https://archive.ics.uci.edu/dataset/468/online+shoppers+purchasing+intention+dataset. The dataset has $12{,}330$ observations and $18$ variables. We want to predict whether or not a customer bought an item (the `Revenue` variable) in a given session using the other variables as inputs. These other variables include things like the location of the shopper, the time of the year at which they are shopping, and their computer's profile, as well as information about the products they are viewing and the pages they are viewing.
+
+In the studies we conducted, we handled the imbalance of the dataset, as well as fit multiple different types of models to determine the relationship between the 17 predictor variables in our dataset and whether or not a shopper purchased the product. For example, we fit K-Means Clustering and hierarchical clustering to determine the relation between the variables through unsupervised methods. We also fit multiple methods following supervised approaches, such as Linear Discriminant Analysis, Random Forests, and Boosted Trees.
+
+Our conclusion is that `PageValues`, the average value of a page that a user visited before completing a transaction, seems to be the most important variable for predicting whether or not a shopper purchased a product, and a lot of the models perform similarly, but the Boosted Tree seems to have the best performance in terms of AUC.
+
+*Note: AI tools were used to assist with portions of the code in this report.*
+
+### Member Contributions
+
+- **Andrew Di**: Data preprocessing, data visualization, and logistic regression.
+- **Praveen Vijayakumar**: Tree-based methods (Random Forest, Gradient Boosting), log-transformation of features, and variable importance analysis.
+- **Gautham Velupally**: PCA, K-means and hierarchical clustering, LDA, KNN
+
+\newpage
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
 ```
 
 ## Introduction and Contextualization
@@ -30,7 +52,7 @@ Our goal is to build classification models that can effectively determine whethe
 
 We'll start by loading in our data.
 
-```{r load-data, message=FALSE}
+```{r load-data}
 library(tidyverse)
 
 shoppers <- read_csv("online_shoppers_intention.csv")
@@ -39,7 +61,7 @@ glimpse(shoppers)
 
 Before fitting any models, we want to inspect the distribution of each input variable individually. This helps us visually identify features that may be skewed or that may follow a distribution that we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
 
-```{r univariate-numeric, fig.width=9, fig.height=7}
+```{r univariate-numeric, fig.width=9, fig.height=5}
 numeric_features <- c(
   "Administrative", "Administrative_Duration",
   "Informational", "Informational_Duration",
@@ -59,7 +81,7 @@ shoppers %>%
 
 After plotting, we notice that each of our numeric features is mostly centered near $0$ and have skew to the right. We may want to perform some log transformation of our features to handle the skew. Notably, `SpecialDay` contains discrete values which may require special handling.
 
-```{r univariate-categorical, fig.width=9, fig.height=7}
+```{r univariate-categorical, fig.width=9, fig.height=5}
 categorical_features <- c(
   "Month", "OperatingSystems", "Browser",
   "Region", "TrafficType", "VisitorType", "Weekend"
@@ -83,7 +105,7 @@ Several of the categorical distributions are heavily imbalanced. `Browser`, `Ope
 
 Univariate plots tell us how each feature is distributed in isolation, but for a classification problem the more useful question is: *does this feature differ between sessions that ended in a purchase and those that did not?* If the conditional distributions of a feature given `Revenue = TRUE` and `Revenue = FALSE` look similar, that feature carries little signal; if they look different, it likely matters. We use boxplots for the numeric features (comparing distributions by `Revenue`) and stacked proportion bars for the categorical features (showing the proportion of purchases within each level relative to the $\sim 15\%$ overall purchase rate).
 
-```{r bivariate-numeric, fig.width=9, fig.height=7}
+```{r bivariate-numeric, fig.width=9, fig.height=5}
 shoppers %>%
   select(all_of(numeric_features), Revenue) %>%
   pivot_longer(-Revenue, names_to = "feature", values_to = "value") %>%
@@ -95,7 +117,7 @@ shoppers %>%
   theme(legend.position = "none")
 ```
 
-```{r bivariate-categorical, fig.width=9, fig.height=7}
+```{r bivariate-categorical, fig.width=9, fig.height=5}
 shoppers %>%
   select(all_of(categorical_features), Revenue) %>%
   mutate(across(-Revenue, as.character)) %>%
@@ -111,19 +133,7 @@ shoppers %>%
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-### Scatterplot Matrix
-
-So far we've looked at each predictor on its own and against the target, but we haven't yet examined how the predictors relate to one another. Several of our numeric features are likely to be strongly related by construction — for example, the count of pages of a given type and the total time spent on those pages should rise together, and `BounceRates` and `ExitRates` measure closely related notions of leaving the site. Highly collinear predictors are a problem for linear models like logistic regression (unstable coefficients, inflated standard errors) and motivate the use of regularization methods like Lasso or Ridge. A scatterplot matrix on the numeric features lets us see these pairwise relationships directly, including any nonlinear patterns that a single correlation coefficient would miss.
-
-```{r scatterplot-matrix, fig.width=10, fig.height=10}
-shoppers_numeric <- subset(shoppers, select = numeric_features)
-pairs(shoppers_numeric,
-      main = "Scatterplot Matrix for Numeric Features",
-      col = "navy",
-      pch = 20)
-```
-
-A few clear patterns stand out from the matrix. Most obviously, each count-and-duration pair lies almost exactly on a line: `Administrative` with `Administrative_Duration`, `Informational` with `Informational_Duration`, and `ProductRelated` with `ProductRelated_Duration`. This is unsurprising — visiting more pages of a given type produces more total time spent on those pages — but it means each pair carries largely the same information, so we should expect collinearity issues with linear models if we include both. `BounceRates` and `ExitRates` also show a strong positive linear relationship, which makes sense given that both measure forms of leaving the site; we will likely want to include only one of them, or rely on regularization to handle the redundancy. Beyond these tight pairs, the relationships are weaker and harder to read because of the heavy right-skew in most features (most points are clustered near the origin with a long tail of outliers), reinforcing the case for log-transforming these variables before fitting linear models. `PageValues` and `SpecialDay` do not appear to be strongly related to any of the other features.
+Several of our numeric features are likely to be strongly related by construction — for example, the count of pages of a given type and the total time spent on those pages should rise together, and `BounceRates` and `ExitRates` measure closely related notions of leaving the site. Highly collinear predictors are a problem for linear models like logistic regression (unstable coefficients, inflated standard errors) and motivate the use of regularization methods like Lasso or Ridge. A scatterplot matrix (see Appendix, Figure A1) confirms this: each count-and-duration pair lies almost exactly on a line, and `BounceRates` and `ExitRates` show a strong positive linear relationship. Beyond these tight pairs, the relationships are weaker. Most features exhibit heavy right-skew (points clustered near the origin), reinforcing the case for log-transforming before fitting models.
 
 ## Data Preparation for Modeling
 
@@ -165,7 +175,6 @@ test_y <- test_data$Revenue
 
 nzv_cols <- nearZeroVar(train_x, names = TRUE)
 if (length(nzv_cols) > 0) {
-  cat("Removing near-zero variance columns:", paste(nzv_cols, collapse = ", "), "\n")
   train_x <- train_x[, !names(train_x) %in% nzv_cols]
   test_x <- test_x[, !names(test_x) %in% nzv_cols]
 }
@@ -173,12 +182,6 @@ if (length(nzv_cols) > 0) {
 preproc <- preProcess(train_x, method = c("center", "scale"))
 train_x_scaled <- predict(preproc, train_x)
 test_x_scaled <- predict(preproc, test_x)
-
-cat("Training set:", nrow(train_data), "observations\n")
-cat("Test set:", nrow(test_data), "observations\n")
-cat("Training class distribution:\n")
-table(train_y) %>% print()
-cat("Number of features after encoding:", ncol(train_x), "\n")
 ```
 
 ## Unsupervised Learning
@@ -187,7 +190,7 @@ cat("Number of features after encoding:", ncol(train_x), "\n")
 
 We apply PCA to the 10 original numeric features (before dummy encoding) to understand the variance structure and to provide reduced-dimension inputs for later models.
 
-```{r pca, fig.width=9, fig.height=5}
+```{r pca, fig.width=9, fig.height=3.5}
 train_numeric <- train_data %>% dplyr::select(all_of(numeric_features))
 test_numeric <- test_data %>% dplyr::select(all_of(numeric_features))
 
@@ -207,12 +210,9 @@ plot(var_explained[3, ], type = "b", pch = 19, col = "darkred",
      main = "Cumulative Variance Explained")
 abline(h = 0.9, lty = 2, col = "gray40")
 par(mfrow = c(1, 1))
-
-cat("Variance explained by first 5 PCs:", round(var_explained[3, 5], 3), "\n")
-cat("Variance explained by first 7 PCs:", round(var_explained[3, 7], 3), "\n")
 ```
 
-```{r pca-biplot, fig.width=8, fig.height=6}
+```{r pca-biplot, fig.width=7, fig.height=4}
 train_pca_scores <- as.data.frame(pca_fit$x[, 1:2])
 train_pca_scores$Revenue <- train_y
 
@@ -246,7 +246,6 @@ plot(2:8, sil_widths, type = "b", pch = 19, col = "steelblue",
      xlab = "Number of Clusters (k)", ylab = "Average Silhouette Width",
      main = "Silhouette Analysis for K-Means")
 best_k <- which.max(sil_widths) + 1
-cat("Best k by silhouette:", best_k, "\n")
 ```
 
 ```{r kmeans-fit, fig.width=9, fig.height=5}
@@ -279,7 +278,6 @@ p2 <- ggplot(cluster_revenue, aes(x = Cluster, y = purchase_rate, fill = Cluster
   theme(legend.position = "none")
 
 gridExtra::grid.arrange(p1, p2, ncol = 2)
-print(cluster_revenue)
 ```
 
 ```{r kmeans-profiles}
@@ -292,25 +290,9 @@ cluster_profiles <- train_data %>%
 cluster_profiles_long <- cluster_profiles %>%
   pivot_longer(-Cluster, names_to = "Feature", values_to = "Mean") %>%
   pivot_wider(names_from = Cluster, values_from = Mean, names_prefix = "Cluster ")
-
-knitr::kable(cluster_profiles_long, digits = 2, caption = "Cluster Centroids (Original Scale)")
 ```
 
-### Hierarchical Clustering
-
-We also apply hierarchical clustering (Ward's method) to a subsample and display a dendrogram to reason about the natural number of groups.
-
-```{r hierarchical, fig.width=9, fig.height=5}
-hc_dist <- dist(train_sample)
-hc_fit <- hclust(hc_dist, method = "ward.D2")
-
-plot(hc_fit, labels = FALSE, hang = -1,
-     main = "Hierarchical Clustering Dendrogram (Ward's Method, n=3000 sample)",
-     xlab = "", sub = "")
-rect.hclust(hc_fit, k = best_k, border = "steelblue")
-```
-
-The dendrogram corroborates the K-means result: the data naturally splits into a small number of groups, broadly distinguishing low-engagement sessions from high-engagement ones.
+Cluster centroid profiles and a hierarchical clustering dendrogram corroborating these groupings are provided in the Appendix (Table A1 and Figure A2).
 
 ## Supervised Learning
 
@@ -353,8 +335,6 @@ lda_pred <- predict(lda_model, test_x_scaled)
 lda_prob <- predict(lda_model, test_x_scaled, type = "prob")
 
 lda_cm <- confusionMatrix(lda_pred, test_y, positive = "Yes")
-cat("LDA Test Results:\n")
-print(lda_cm)
 
 results[["LDA"]] <- list(
   model = lda_model,
@@ -377,15 +357,10 @@ knn_model <- train(
   tuneGrid = data.frame(k = c(3, 5, 7, 11, 15, 21, 31, 51))
 )
 
-cat("KNN tuning results:\n")
-print(knn_model$results)
-
 knn_pred <- predict(knn_model, test_x_scaled)
 knn_prob <- predict(knn_model, test_x_scaled, type = "prob")
 
 knn_cm <- confusionMatrix(knn_pred, test_y, positive = "Yes")
-cat("\nKNN Test Results (best k =", knn_model$bestTune$k, "):\n")
-print(knn_cm)
 
 results[["KNN"]] <- list(
   model = knn_model,
@@ -411,13 +386,113 @@ knn_pca_pred <- predict(knn_pca_model, test_pca_full)
 knn_pca_prob <- predict(knn_pca_model, test_pca_full, type = "prob")
 
 knn_pca_cm <- confusionMatrix(knn_pca_pred, test_y, positive = "Yes")
-cat("KNN (7 PCs) Test Results (best k =", knn_pca_model$bestTune$k, "):\n")
-print(knn_pca_cm)
 
 results[["KNN (PCA)"]] <- list(
   model = knn_pca_model,
   cm = knn_pca_cm,
   probs = knn_pca_prob
+)
+```
+
+## Tree Methods: Bagging, Boosting, and Random Forest
+
+We now consider tree-based classifiers. First, we apply a log-transform to all numeric features. As the scatterplot matrix showed, nearly all numeric variables exhibit heavy right-skew with most observations clustered near zero. Skewed inputs can destabilize split selection in trees and inflate the influence of extreme values. Applying `log1p` (i.e., $\log(1+x)$) compresses the right tail while handling zeros gracefully, since $\log(0)$ is undefined but $\log(1) = 0$.
+
+```{r log-transform}
+train_x_log <- train_x %>%
+  mutate(across(all_of(intersect(numeric_features, names(train_x))), log1p))
+test_x_log <- test_x %>%
+  mutate(across(all_of(intersect(numeric_features, names(train_x))), log1p))
+```
+
+### Random Forest
+
+We fit a random forest with 1,000 trees and tune `mtry` (the number of features considered at each split) using out-of-bag (OOB) error. OOB error is the natural evaluation metric for bagged models: each tree is trained on a bootstrap sample, and the observations left out of that sample provide a built-in validation set without needing a separate cross-validation loop.
+
+```{r rf-fit, results='hide'}
+library(randomForest)
+
+ctrl_oob <- trainControl(method = "oob", classProbs = TRUE)
+rf <- train(
+  x = train_x_log, y = train_y, method = "rf",
+  trControl = ctrl_oob,
+  tuneGrid = expand.grid(mtry = c(5, 10, 15, 20, ncol(train_x_log))),
+  ntree = 1000, importance = TRUE
+)
+```
+
+```{r rf-results}
+knitr::kable(rf$results[, c("mtry", "Accuracy", "Kappa")], digits = 4,
+             caption = "Random Forest: OOB Performance by mtry")
+```
+
+The optimal `mtry` is `r rf$bestTune$mtry`, achieving an OOB accuracy of `r round(rf$results$Accuracy[which.min(rf$results$Accuracy == max(rf$results$Accuracy))], 4)`. Note that the bagging model (`mtry` = `r ncol(train_x_log)`, using all predictors) performs worse than the random forest, confirming that decorrelating the trees by restricting the feature set at each split improves ensemble performance.
+
+```{r rf-test, fig.height=4, fig.width=10}
+rf_pred <- predict(rf, newdata = test_x_log)
+rf_cm <- confusionMatrix(rf_pred, test_y, positive = "Yes")
+
+varImpPlot(rf$finalModel, main = "Variable Importance for Online Shoppers")
+```
+
+`PageValues` is by far the most important variable by both mean decrease in accuracy and mean decrease in Gini, consistent with its role as a direct proxy for purchase intent. The test accuracy is `r round(rf_cm$overall["Accuracy"], 4)`.
+
+### Gradient Boosting (GBM)
+
+Unlike random forests, boosting builds trees sequentially, with each tree correcting the errors of the previous ensemble. We tune the number of trees, interaction depth, and learning rate via 5-fold cross-validation on accuracy. We use accuracy rather than OOB error because boosting does not employ bootstrap aggregation.
+
+```{r gbm-fit, results='hide'}
+gbm_grid <- expand.grid(
+  n.trees = c(500, 1000),
+  interaction.depth = c(3, 4),
+  shrinkage = c(0.01, 0.1),
+  n.minobsinnode = 10
+)
+
+ctrl_accuracy <- trainControl(
+  method = "cv", number = 5,
+  classProbs = TRUE, summaryFunction = defaultSummary
+)
+
+combined <- as.data.frame(train_x_log)
+combined$Revenue <- train_y
+
+gbm_fit <- train(
+  Revenue ~ ., data = combined, method = "gbm",
+  trControl = ctrl_accuracy, tuneGrid = gbm_grid,
+  metric = "Accuracy", verbose = FALSE
+)
+```
+
+```{r gbm-results}
+best_gbm <- gbm_fit$bestTune
+cat("Best GBM: n.trees =", best_gbm$n.trees,
+    ", depth =", best_gbm$interaction.depth,
+    ", shrinkage =", best_gbm$shrinkage, "\n")
+
+gbm_imp <- summary(gbm_fit$finalModel, plotit = FALSE)
+knitr::kable(head(gbm_imp, 10), digits = 2,
+             caption = "GBM: Top 10 Variables by Relative Influence")
+```
+
+Again, `PageValues` dominates the relative influence rankings. The optimal model uses `r best_gbm$n.trees` trees with interaction depth `r best_gbm$interaction.depth` and a learning rate of `r best_gbm$shrinkage`.
+
+```{r gbm-test}
+gbm_pred <- predict(gbm_fit, newdata = test_x_log)
+gbm_cm <- confusionMatrix(gbm_pred, test_y, positive = "Yes")
+```
+
+The GBM test accuracy is `r round(gbm_cm$overall["Accuracy"], 4)`, slightly higher than the random forest.
+
+```{r tree-store-results}
+results[["Random Forest"]] <- list(
+  cm = rf_cm,
+  probs = predict(rf, newdata = test_x_log, type = "prob")
+)
+
+results[["GBM"]] <- list(
+  cm = gbm_cm,
+  probs = predict(gbm_fit, newdata = test_x_log, type = "prob")
 )
 ```
 
@@ -463,7 +538,7 @@ rownames(comparison) <- NULL
 knitr::kable(comparison, caption = "Model Comparison on Test Set")
 ```
 
-```{r roc-curves, fig.width=8, fig.height=6}
+```{r roc-curves, fig.width=8, fig.height=4}
 roc_list <- list()
 for (name in names(results)) {
   roc_list[[name]] <- roc(test_y, results[[name]]$probs$Yes,
@@ -478,4 +553,46 @@ legend("bottomright",
        legend = paste0(names(roc_list), " (AUC=", 
                        sapply(roc_list, function(r) round(auc(r), 3)), ")"),
        col = 1:length(roc_list), lwd = 2, cex = 0.8)
+```
+
+The comparison table and ROC curves reveal several patterns. The tree-based ensemble methods (GBM and Random Forest) achieve the highest accuracy and AUC, benefiting from their ability to capture nonlinear interactions and handle the mixed feature space. LDA performs well among the simpler methods due to the strong linear signal in `PageValues` and `ExitRates`. All models show relatively low sensitivity, a direct consequence of the $\sim 85\%$ class imbalance: with a default 0.5 threshold, classifiers are conservative and rarely predict a purchase unless the evidence is overwhelming. KNN suffers from the curse of dimensionality, though PCA-reduced features partially mitigate this. Across all methods, `PageValues` consistently emerges as the dominant predictor of purchase intent.
+
+## Conclusion
+
+Among the models evaluated, Gradient Boosted Trees achieved the best overall test performance, followed closely by Random Forest. Both ensemble methods substantially outperformed the simpler classifiers (LDA, KNN) in accuracy and AUC, owing to their capacity for modeling nonlinear feature interactions and their robustness to the mixed numeric-categorical feature space. We recommend GBM as the primary classifier for this task, with Random Forest as a strong alternative that offers more interpretable variable importance measures. Regardless of method, the class imbalance remains the central challenge: all models exhibit high specificity but limited sensitivity, indicating that threshold tuning or oversampling strategies would be necessary for deployment in a real-time purchase-intent flagging system.
+
+### Future Work
+
+From the tree models, the variable that is most important across all methods — both in mean decrease in accuracy and mean decrease in Gini — is `PageValues`. Conversely, the least important variables include several `TrafficType` levels, `Weekend`, `Month`, operating system indicators, and some `Region` levels. This suggests that temporal and geographic attributes do not contribute substantially to predicting revenue, nor does the operating system used by a potential customer. These findings are largely unsurprising, with the notable exception of `Month`: one might expect seasonality to play a significant role in purchasing behavior, given that different months bring different occasions and shopping surges. The relatively low importance of `Month` warrants further investigation — for instance, whether its effect is absorbed by `SpecialDay` or whether a more granular temporal encoding (e.g., week-of-year) would reveal stronger seasonal signal.
+
+\newpage
+
+## Appendix
+
+### Figure A1: Scatterplot Matrix
+
+```{r scatterplot-matrix, fig.width=10, fig.height=10}
+shoppers_numeric <- subset(shoppers, select = numeric_features)
+pairs(shoppers_numeric,
+      main = "Scatterplot Matrix for Numeric Features",
+      col = "navy",
+      pch = 20)
+```
+
+### Table A1: Cluster Centroids
+
+```{r appendix-cluster-profiles}
+knitr::kable(cluster_profiles_long, digits = 2, caption = "Cluster Centroids (Original Scale)")
+```
+
+### Figure A2: Hierarchical Clustering Dendrogram
+
+```{r appendix-hierarchical, fig.width=9, fig.height=5}
+hc_dist <- dist(train_sample)
+hc_fit <- hclust(hc_dist, method = "ward.D2")
+
+plot(hc_fit, labels = FALSE, hang = -1,
+     main = "Hierarchical Clustering Dendrogram (Ward's Method, n=3000 sample)",
+     xlab = "", sub = "")
+rect.hclust(hc_fit, k = best_k, border = "steelblue")
 ```
