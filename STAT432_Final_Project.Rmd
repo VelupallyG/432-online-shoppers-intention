@@ -2,9 +2,6 @@
 title: "STAT432 Final Project: Predicting Online Shoppers' Purchasing Intention"
 output: pdf_document
 date: "2026-04-30"
-output:
-  pdf_document:
-    number_sections: true
 ---
 
 \begin{center}
