@@ -56,90 +56,102 @@ We'll start by loading in our data.
 library(tidyverse)
 
 shoppers <- read_csv("online_shoppers_intention.csv")
-glimpse(shoppers)
 ```
 
-Before fitting any models, we want to inspect the distribution of each input variable individually. This helps us visually identify features that may be skewed or that may follow a distribution that we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
+After loading in the data, we'll check for any missing data and print a summary of our dataset.
 
-```{r univariate-numeric, fig.width=9, fig.height=5}
+```{r clean}
 numeric_features <- c(
   "Administrative", "Administrative_Duration",
   "Informational", "Informational_Duration",
   "ProductRelated", "ProductRelated_Duration",
   "BounceRates", "ExitRates", "PageValues", "SpecialDay"
 )
-
-shoppers %>%
-  select(all_of(numeric_features)) %>%
-  pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
-  ggplot(aes(x = value)) +
-  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
-  facet_wrap(~ feature, scales = "free", ncol = 3) +
-  labs(title = "Distributions of Numeric Features", x = NULL, y = "Count") +
-  theme_minimal()
-```
-
-After plotting, we notice that each of our numeric features is mostly centered near $0$ and have skew to the right. We may want to perform some log transformation of our features to handle the skew. Notably, `SpecialDay` contains discrete values which may require special handling.
-
-```{r univariate-categorical, fig.width=9, fig.height=5}
 categorical_features <- c(
   "Month", "OperatingSystems", "Browser",
   "Region", "TrafficType", "VisitorType", "Weekend"
 )
 
-shoppers %>%
-  select(all_of(categorical_features)) %>%
-  mutate(across(everything(), as.character)) %>%
-  pivot_longer(everything(), names_to = "feature", values_to = "value") %>%
-  ggplot(aes(x = value)) +
-  geom_bar(fill = "steelblue") +
-  facet_wrap(~ feature, scales = "free", ncol = 3) +
-  labs(title = "Distributions of Categorical Features", x = NULL, y = "Count") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+summary(shoppers[, numeric_features])
 ```
 
-Several of the categorical distributions are heavily imbalanced. `Browser`, `OperatingSystems`, and `TrafficType` are dominated by one or two levels with a long tail of rare ones, which suggests we may want to lump rare levels together (e.g. via `forcats::fct_lump`) before modeling so that the rare levels don't introduce instability. `VisitorType` is mostly returning visitors with a smaller share of new visitors, and `Weekend` is mostly `FALSE`. `Month` shows a seasonal pattern with clear peaks (notably in May and November). Whether features like `OperatingSystems` or `Browser` carry real predictive signal is an open question — we'll get a better sense of that in the bivariate plots below.
+We find that we don't have any missing data values. Initially, we notice that most of our numeric features are concentrated near lower values but seem to have a right skew. We'll plot our features individually to visualize and identify any skewness or distributions we can take advantage of. We separate variables into numeric and categorical groups, plotting histograms for numeric features and bar plots for categorical features.
 
-### Bivariate Distributions vs. Revenue
+```{r univariate-numeric, fig.width=9, fig.height=5}
+par(mfrow = c(4, 3), mar = c(4, 4, 2, 1))
+for (feat in numeric_features) {
+  hist(shoppers[[feat]],
+       breaks = 40,
+       col = "steelblue",
+       border = "white",
+       main = feat,
+       xlab = NULL)
+}
+par(mfrow = c(1, 1))
+```
 
-Univariate plots tell us how each feature is distributed in isolation, but for a classification problem the more useful question is: *does this feature differ between sessions that ended in a purchase and those that did not?* If the conditional distributions of a feature given `Revenue = TRUE` and `Revenue = FALSE` look similar, that feature carries little signal; if they look different, it likely matters. We use boxplots for the numeric features (comparing distributions by `Revenue`) and stacked proportion bars for the categorical features (showing the proportion of purchases within each level relative to the $\sim 15\%$ overall purchase rate).
+After plotting, we confirm that each of our numeric features is mostly concentrated at low values and skewed to the right. We may want to perform some log transformation of our features to handle the skew. Notably, `SpecialDay` contains discrete values which may require special handling.
+
+```{r univariate-categorical, fig.width=9, fig.height=5}
+par(mfrow = c(3, 3), mar = c(6, 4, 2, 1))
+for (feat in categorical_features) {
+  counts <- table(as.character(shoppers[[feat]]))
+  barplot(counts,
+          col = "steelblue",
+          main = feat,
+          las = 2,
+          cex.names = 0.8)
+}
+par(mfrow = c(1, 1))
+```
+
+After plotting, we notice that several of our categorical features are heavily imbalanced. `Browser`, `OperatingSystems`, and `TrafficType` are mostly dominated by one or two levels. Similarly, `VisitorType` is mostly returning visitors with a smaller number of new visitors, and `Weekend` is mostly `FALSE`. `Month` shows a lot of seasonality with clear peaks in May and November, which could be explained by the end of the school year and graduation gifts in May, and the upcoming holiday season in November.
+
+While plotting our features individually helps us understand their distribution, plotting the features against `Revenue` helps us identify if our feature distribution is dependent on whether or not a user made a purchase. If the conditional distributions of a feature given different `Revenue` value look different, then those features could carry more signal and are worth examining more. Below, we create box plots for our numeric features (compared against `Revenue`), and bar plots measuring per-level purchase rates for our categorical features. In our bar plots, the dashed line references the $\sim 15\%$ purchase rate in our overall dataset to compare against.
 
 ```{r bivariate-numeric, fig.width=9, fig.height=5}
-shoppers %>%
-  select(all_of(numeric_features), Revenue) %>%
-  pivot_longer(-Revenue, names_to = "feature", values_to = "value") %>%
-  ggplot(aes(x = Revenue, y = value, fill = Revenue)) +
-  geom_boxplot(outlier.size = 0.4, alpha = 0.8) +
-  facet_wrap(~ feature, scales = "free_y", ncol = 3) +
-  labs(title = "Numeric Features by Revenue", x = "Revenue", y = NULL) +
-  theme_minimal() +
-  theme(legend.position = "none")
+par(mfrow = c(4, 3), mar = c(3, 4, 2, 1))
+for (feat in numeric_features) {
+  boxplot(shoppers[[feat]] ~ shoppers$Revenue,
+          col = c("salmon", "steelblue"),
+          main = feat,
+          xlab = "Revenue",
+          ylab = NULL,
+          outcex = 0.4)
+}
+par(mfrow = c(1, 1))
 ```
+
+When visually inspecting the conditional distribution of our numeric features against `Revenue`, we find that when `Revenue` is `TRUE`, our `Administrative`, `Administrative_Duration`, `Informational`, `Informational_Duration`, `ProductRelated`, `ProductRelated_Duration`, and `PageValues` tend to be higher, while `BounceRates` and `ExitRates` tend to be lower. Because of the distinct distributions when compared against different values of `Revenue`, these might be features that are more important in our models.
+
+Additionally, each of our box plots contains some amount of outliers. We believe the heavy right skewness of our features makes sense. For example, most users probably don't spend that much time on a page, which is why `Administrative_Duration` and `Informational_Duration` are mostly concentrated at low values. However, a few users will certainly spend far more time on a page. We decided to keep the outliers for each of our numeric features because we believe they capture and represent the skewed behavior that we've described.
 
 ```{r bivariate-categorical, fig.width=9, fig.height=5}
-shoppers %>%
-  select(all_of(categorical_features), Revenue) %>%
-  mutate(across(-Revenue, as.character)) %>%
-  pivot_longer(-Revenue, names_to = "feature", values_to = "value") %>%
-  ggplot(aes(x = value, fill = Revenue)) +
-  geom_bar(position = "fill") +
-  geom_hline(yintercept = mean(shoppers$Revenue), linetype = "dashed", color = "black") +
-  facet_wrap(~ feature, scales = "free_x", ncol = 3) +
-  labs(title = "Purchase Proportion by Categorical Feature",
-       subtitle = "Dashed line marks the overall purchase rate (~15%)",
-       x = NULL, y = "Proportion") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+overall_rate <- mean(shoppers$Revenue)
+par(mfrow = c(3, 3), mar = c(6, 4, 2, 1))
+for (feat in categorical_features) {
+  rates <- tapply(shoppers$Revenue, as.character(shoppers[[feat]]), mean)
+  barplot(rates,
+          col = "steelblue",
+          main = feat,
+          ylab = "Purchase Rate",
+          las = 2,
+          cex.names = 0.8,
+          ylim = c(0, max(c(rates, overall_rate)) * 1.1))
+  abline(h = overall_rate, lty = 2, col = "red")
+}
+par(mfrow = c(1, 1))
 ```
 
-Several of our numeric features are likely to be strongly related by construction — for example, the count of pages of a given type and the total time spent on those pages should rise together, and `BounceRates` and `ExitRates` measure closely related notions of leaving the site. Highly collinear predictors are a problem for linear models like logistic regression (unstable coefficients, inflated standard errors) and motivate the use of regularization methods like Lasso or Ridge. A scatterplot matrix (see Appendix, Figure A1) confirms this: each count-and-duration pair lies almost exactly on a line, and `BounceRates` and `ExitRates` show a strong positive linear relationship. Beyond these tight pairs, the relationships are weaker. Most features exhibit heavy right-skew (points clustered near the origin), reinforcing the case for log-transforming before fitting models.
+Now, when examining our categorical features, we can identify certain levels in our features that correspond with a larger purchase rate than average. For example, the purchase rate on the weekend is higher than average, and new visitors tend to have a higher purchase rate than average (and when compared to returning visitors). Users also tend to have a higher-than-average purchase rate in November, October, and September.
+
+So far, we've examined each feature individually and compared against `Revenue`. It would also be useful for us to compare features against each other to identify any collinearity. A scatterplot matrix of our numeric features (see Appendix, Figure A1) reveals that corresponding count-and-duration feature pairs lie almost on a line, and `BounceRates` and `ExitRates` show a strong positive linear relationship. Because of the collinearity between some of our features, we'll consider regularization in our models to handle redundancy.
 
 ## Data Preparation for Modeling
 
-Before fitting any models, we need to encode categorical variables, split the data into training and test sets, and standardize numeric features. We convert `Revenue` to a factor, encode `Month` and `VisitorType` as dummy variables, and treat the integer-coded nominal features (`OperatingSystems`, `Browser`, `Region`, `TrafficType`) as factors to be dummy-encoded as well.
+Before fitting any models, we need to encode categorical variables, split the data into training and test sets, and standardize numeric features. We convert `Revenue` to a factor, encode `Month` and `VisitorType` as dummy variables, and treat the categorical features with numeric labels (`OperatingSystems`, `Browser`, `Region`, `TrafficType`) as factors to be dummy-encoded as well. We also apply a log-transform to the skewed numeric features (excluding `BounceRates`, `ExitRates`, and `SpecialDay` which are bounded or discrete) to stabilize model training. We split the dataset $70/30$ into training and test sets. Full data preparation code is provided in the Appendix.
 
-```{r data-prep, message=FALSE}
+```{r data-prep}
 library(caret)
 library(MASS)
 library(class)
@@ -148,29 +160,27 @@ library(cluster)
 
 set.seed(432)
 
-shoppers_model <- shoppers %>%
-  mutate(
-    Revenue = factor(Revenue, levels = c(FALSE, TRUE), labels = c("No", "Yes")),
-    Month = factor(Month),
-    VisitorType = factor(VisitorType),
-    Weekend = factor(Weekend),
-    OperatingSystems = factor(OperatingSystems),
-    Browser = factor(Browser),
-    Region = factor(Region),
-    TrafficType = factor(TrafficType)
-  )
+shoppers_model <- shoppers
+shoppers_model$Revenue <- factor(shoppers_model$Revenue,
+                                 levels = c(FALSE, TRUE),
+                                 labels = c("No", "Yes"))
+factor_cols <- c("Month", "VisitorType", "Weekend",
+                 "OperatingSystems", "Browser", "Region", "TrafficType")
+for (col in factor_cols) {
+  shoppers_model[[col]] <- factor(shoppers_model[[col]])
+}
 
 dummy_formula <- dummyVars(Revenue ~ ., data = shoppers_model, fullRank = TRUE)
-shoppers_encoded <- predict(dummy_formula, newdata = shoppers_model) %>% as.data.frame()
+shoppers_encoded <- as.data.frame(predict(dummy_formula, newdata = shoppers_model))
 shoppers_encoded$Revenue <- shoppers_model$Revenue
 
 train_idx <- createDataPartition(shoppers_encoded$Revenue, p = 0.7, list = FALSE)
 train_data <- shoppers_encoded[train_idx, ]
 test_data <- shoppers_encoded[-train_idx, ]
 
-train_x <- train_data %>% dplyr::select(-Revenue)
+train_x <- train_data[, names(train_data) != "Revenue"]
 train_y <- train_data$Revenue
-test_x <- test_data %>% dplyr::select(-Revenue)
+test_x <- test_data[, names(test_data) != "Revenue"]
 test_y <- test_data$Revenue
 
 nzv_cols <- nearZeroVar(train_x, names = TRUE)
@@ -179,10 +189,126 @@ if (length(nzv_cols) > 0) {
   test_x <- test_x[, !names(test_x) %in% nzv_cols]
 }
 
+log_features <- c("Administrative", "Administrative_Duration",
+                  "Informational", "Informational_Duration",
+                  "ProductRelated", "ProductRelated_Duration",
+                  "PageValues")
+train_x_log <- train_x
+test_x_log  <- test_x
+for (col in log_features) {
+  if (col %in% names(train_x_log)) {
+    train_x_log[[col]] <- log1p(train_x_log[[col]])
+    test_x_log[[col]]  <- log1p(test_x_log[[col]])
+  }
+}
+
 preproc <- preProcess(train_x, method = c("center", "scale"))
 train_x_scaled <- predict(preproc, train_x)
 test_x_scaled <- predict(preproc, test_x)
 ```
+
+## Logistic Regression
+
+We fit four logistic regression variants: a default logistic regression without any penalty as baseline, Lasso ($L_1$), Ridge ($L_2$), and Elastic Net (a mix of both). To account for our skewness, we use our log-transformed features rather than their un-transformed counterparts. The penalized variants are motivated by the multicollinearity we observed between count/duration pairs and between `BounceRates` and `ExitRates`. For each penalized variant we use `cv.glmnet` with 10-fold cross-validation to pick $\lambda$, and for Elastic Net we additionally grid-search over $\alpha$.
+
+```{r logistic-setup}
+library(pROC)
+
+report_metrics <- function(name, prob, truth) {
+  pred <- factor(ifelse(prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
+  cm   <- confusionMatrix(pred, truth, positive = "Yes")
+  sens <- cm$byClass["Sensitivity"]
+  prec <- cm$byClass["Pos Pred Value"]
+  f1   <- ifelse(is.na(prec) || (sens + prec) == 0, 0,
+                 2 * sens * prec / (sens + prec))
+  auc_val <- as.numeric(auc(roc(truth, prob, levels = c("No", "Yes"), quiet = TRUE)))
+  data.frame(Model = name, Accuracy = round(cm$overall["Accuracy"], 4),
+             Sensitivity = round(sens, 4), Specificity = round(cm$byClass["Specificity"], 4),
+             F1 = round(f1, 4), AUC = round(auc_val, 4), row.names = NULL)
+}
+```
+
+### Baseline (Unpenalized) Logistic Regression
+
+We start with a standard logistic regression on all encoded predictors as a benchmark.
+
+```{r logistic-baseline}
+set.seed(432)
+log_train_df <- data.frame(Revenue = train_y, train_x_log)
+log_test_df  <- data.frame(Revenue = test_y,  test_x_log)
+
+log_baseline <- glm(Revenue ~ ., data = log_train_df, family = binomial())
+log_baseline_prob <- predict(log_baseline, newdata = log_test_df, type = "response")
+```
+
+### Lasso-Penalized Logistic Regression ($L_1$)
+
+Adding a Lasso penalty shrinks coefficients toward zero, performing automatic feature selection. We use `cv.glmnet` with 10-fold CV to pick the $\lambda$ that minimizes cross-validated deviance.
+
+```{r logistic-lasso}
+set.seed(432)
+library(glmnet)
+
+x_train_mat <- as.matrix(train_x_log)
+x_test_mat  <- as.matrix(test_x_log)
+
+lasso_cv <- cv.glmnet(x = x_train_mat, y = train_y,
+                      family = "binomial", alpha = 1, nfolds = 10)
+log_lasso_prob <- as.numeric(predict(lasso_cv, newx = x_test_mat,
+                                     s = "lambda.min", type = "response"))
+```
+
+### Ridge-Penalized Logistic Regression ($L_2$)
+
+Ridge shrinks all coefficients toward zero but never to exactly zero, helping handle collinearity between our features.
+
+```{r logistic-ridge}
+set.seed(432)
+
+ridge_cv <- cv.glmnet(x = x_train_mat, y = train_y,
+                      family = "binomial", alpha = 0, nfolds = 10)
+log_ridge_prob <- as.numeric(predict(ridge_cv, newx = x_test_mat,
+                                     s = "lambda.min", type = "response"))
+```
+
+### Elastic Net Logistic Regression
+
+Elastic Net blends $L_1$ and $L_2$ via a mixing parameter $\alpha \in (0, 1)$. We grid-search over $\alpha$ and pick the combination with the lowest cross-validated error.
+
+```{r logistic-elastic}
+set.seed(432)
+
+alpha_grid <- seq(0.1, 0.9, by = 0.1)
+elastic_cv_results <- lapply(alpha_grid, function(a) {
+  set.seed(432)
+  cv.glmnet(x = x_train_mat, y = train_y,
+            family = "binomial", alpha = a, nfolds = 10)
+})
+
+cv_min_errors  <- sapply(elastic_cv_results, function(fit) min(fit$cvm))
+best_alpha_idx <- which.min(cv_min_errors)
+best_alpha     <- alpha_grid[best_alpha_idx]
+elastic_cv     <- elastic_cv_results[[best_alpha_idx]]
+log_elastic_prob <- as.numeric(predict(elastic_cv, newx = x_test_mat,
+                                       s = "lambda.min", type = "response"))
+```
+
+### Logistic Regression Comparison
+
+```{r logistic-comparison}
+logreg_comparison <- rbind(
+  report_metrics("Baseline", log_baseline_prob, test_y),
+  report_metrics("Lasso", log_lasso_prob, test_y),
+  report_metrics("Ridge", log_ridge_prob, test_y),
+  report_metrics("Elastic Net", log_elastic_prob, test_y)
+)
+knitr::kable(logreg_comparison, caption = "Logistic Regression Variants: Test Set Performance")
+
+lasso_pred <- factor(ifelse(log_lasso_prob > 0.5, "Yes", "No"), levels = c("No", "Yes"))
+lasso_cm <- confusionMatrix(lasso_pred, test_y, positive = "Yes")
+```
+
+The Lasso and Elastic Net models perform similarly and slightly outperform the unpenalized baseline, confirming that regularization helps in the presence of collinear features. Ridge performs slightly worse, likely because it retains all features rather than zeroing out uninformative ones. Overall, the Lasso-penalized model offers the best balance of simplicity and performance among the logistic regression variants.
 
 ## Unsupervised Learning
 
@@ -308,6 +434,11 @@ ctrl <- trainControl(
 )
 
 results <- list()
+
+results[["Lasso LogReg"]] <- list(
+  cm = lasso_cm,
+  probs = data.frame(No = 1 - log_lasso_prob, Yes = log_lasso_prob)
+)
 ```
 
 ### Discriminant Analysis: Choosing Between LDA, QDA, and Naive Bayes
@@ -396,14 +527,7 @@ results[["KNN (PCA)"]] <- list(
 
 ## Tree Methods: Bagging, Boosting, and Random Forest
 
-We now consider tree-based classifiers. First, we apply a log-transform to all numeric features. As the scatterplot matrix showed, nearly all numeric variables exhibit heavy right-skew with most observations clustered near zero. Skewed inputs can destabilize split selection in trees and inflate the influence of extreme values. Applying `log1p` (i.e., $\log(1+x)$) compresses the right tail while handling zeros gracefully, since $\log(0)$ is undefined but $\log(1) = 0$.
-
-```{r log-transform}
-train_x_log <- train_x %>%
-  mutate(across(all_of(intersect(numeric_features, names(train_x))), log1p))
-test_x_log <- test_x %>%
-  mutate(across(all_of(intersect(numeric_features, names(train_x))), log1p))
-```
+We now consider tree-based classifiers. We use the log-transformed features prepared earlier.
 
 ### Random Forest
 
@@ -569,6 +693,56 @@ From the tree models, the variable that is most important across all methods —
 
 ## Appendix
 
+### Data Preparation Code
+
+```{r appendix-data-prep, echo=TRUE, eval=FALSE}
+library(caret); library(MASS); library(class); library(e1071); library(cluster)
+set.seed(432)
+
+# Convert Revenue and categorical features to factors
+shoppers_model <- shoppers
+shoppers_model$Revenue <- factor(shoppers_model$Revenue,
+                                 levels = c(FALSE, TRUE), labels = c("No", "Yes"))
+factor_cols <- c("Month", "VisitorType", "Weekend",
+                 "OperatingSystems", "Browser", "Region", "TrafficType")
+for (col in factor_cols) shoppers_model[[col]] <- factor(shoppers_model[[col]])
+
+# One-hot encode categoricals
+dummy_formula <- dummyVars(Revenue ~ ., data = shoppers_model, fullRank = TRUE)
+shoppers_encoded <- as.data.frame(predict(dummy_formula, newdata = shoppers_model))
+shoppers_encoded$Revenue <- shoppers_model$Revenue
+
+# Stratified 70/30 train/test split
+train_idx <- createDataPartition(shoppers_encoded$Revenue, p = 0.7, list = FALSE)
+train_data <- shoppers_encoded[train_idx, ]; test_data <- shoppers_encoded[-train_idx, ]
+train_x <- train_data[, names(train_data) != "Revenue"]; train_y <- train_data$Revenue
+test_x <- test_data[, names(test_data) != "Revenue"]; test_y <- test_data$Revenue
+
+# Remove near-zero variance columns
+nzv_cols <- nearZeroVar(train_x, names = TRUE)
+if (length(nzv_cols) > 0) {
+  train_x <- train_x[, !names(train_x) %in% nzv_cols]
+  test_x <- test_x[, !names(test_x) %in% nzv_cols]
+}
+
+# Log-transform skewed numeric features (skip bounded/discrete ones)
+log_features <- c("Administrative", "Administrative_Duration",
+                  "Informational", "Informational_Duration",
+                  "ProductRelated", "ProductRelated_Duration", "PageValues")
+train_x_log <- train_x; test_x_log <- test_x
+for (col in log_features) {
+  if (col %in% names(train_x_log)) {
+    train_x_log[[col]] <- log1p(train_x_log[[col]])
+    test_x_log[[col]]  <- log1p(test_x_log[[col]])
+  }
+}
+
+# Center and scale for distance-based methods
+preproc <- preProcess(train_x, method = c("center", "scale"))
+train_x_scaled <- predict(preproc, train_x)
+test_x_scaled <- predict(preproc, test_x)
+```
+
 ### Figure A1: Scatterplot Matrix
 
 ```{r scatterplot-matrix, fig.width=10, fig.height=10}
@@ -596,3 +770,7 @@ plot(hc_fit, labels = FALSE, hang = -1,
      xlab = "", sub = "")
 rect.hclust(hc_fit, k = best_k, border = "steelblue")
 ```
+
+### Full Code
+
+All code for this project is available at: https://github.com/VelupallyG/432-online-shoppers-intention
